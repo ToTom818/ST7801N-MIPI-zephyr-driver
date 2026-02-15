@@ -62,6 +62,6 @@ properties:
     type: int
     default: 65535
     description: |
-      Maximum DSI long packet payload size in bytes (excluding the DCS command byte).
-      This value must be supported by both the DSI host controller and the display.
-      Default is 65535 (DSI specification limit).
+      Maximum total payload size (including the DCS command byte) for a
+      DSI long packet. This must be supported by both the DSI host
+      controller and the display.

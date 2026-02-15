@@ -252,12 +252,11 @@ static int st7801n_hw_init(const struct device *dev)
 		return ret;
 	}
 
-	/* Restore brightness if previously set */
-	if (data->brightness) {
-		ret = st7801n_dcs_write_packet(dev, ST7801N_CMD_WRDISBV, &data->brightness, 1);
-		if (ret < 0) {
-			LOG_ERR("Failed to restore brightness: %d", ret);
-		}
+	/* Always set brightness to the stored value (initialized to 0xFF) */
+	ret = st7801n_dcs_write_packet(dev, ST7801N_CMD_WRDISBV, &data->brightness, 1);
+	if (ret < 0) {
+		LOG_ERR("Failed to set brightness: %d", ret);
+		/* non‑fatal, continue */
 	}
 
 	data->powered_on = true;
@@ -288,11 +287,14 @@ static int st7801n_init(const struct device *dev)
 		return -EINVAL;
 	}
 
+	/* Initialize brightness to hardware default (0xFF) */
+	data->brightness = 0xFF;
+
 #ifdef CONFIG_ST7801N_USE_STATIC_BUFFER
 	/* Verify that static buffer is large enough for DSI payload */
-	if (CONFIG_ST7801N_STATIC_BUF_SIZE < (cfg->max_dsi_payload - 1)) {
+	if (CONFIG_ST7801N_STATIC_BUF_SIZE < cfg->max_dsi_payload) {
 		LOG_ERR("Static buffer size (%d) is too small for max DSI payload (%d)",
-			CONFIG_ST7801N_STATIC_BUF_SIZE, cfg->max_dsi_payload - 1);
+			CONFIG_ST7801N_STATIC_BUF_SIZE, cfg->max_dsi_payload);
 		return -ENOMEM;
 	}
 #endif
@@ -352,6 +354,8 @@ static int st7801n_init(const struct device *dev)
 	return 0;
 
 err_hw:
+	/* Fall through to regulator cleanup */
+err_gpio:
 	if (cfg->vci_reg.dev) {
 		regulator_disable(cfg->vci_reg.dev, cfg->vci_reg.id);
 	}
@@ -359,7 +363,6 @@ err_vci:
 	if (cfg->vddi_reg.dev) {
 		regulator_disable(cfg->vddi_reg.dev, cfg->vddi_reg.id);
 	}
-err_gpio:
 	return ret;
 }
 
@@ -529,6 +532,10 @@ static int st7801n_write(const struct device *dev, const uint16_t x,
 	}
 
 	k_mutex_lock(&data->lock, K_FOREVER);
+	if (!data->powered_on) {
+		ret = -EIO;
+		goto out;
+	}
 
 	/* Set column address */
 	col_params[0] = (x >> 8) & 0xFF;
