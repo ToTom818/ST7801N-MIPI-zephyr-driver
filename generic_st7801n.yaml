@@ -1,0 +1,67 @@
+description: Sitronix ST7801N AMOLED display controller with MIPI DSI
+
+compatible: "sitronix,st7801n"
+
+include: [mipi-dsi-device.yaml, gpio.yaml, regulator.yaml]
+
+properties:
+  reset-gpios:
+    type: phandle-array
+    description: Reset pin
+
+  te-gpios:
+    type: phandle-array
+    description: Tearing effect pin (optional)
+
+  te-mode:
+    type: string
+    enum:
+      - "mode1"
+      - "mode2"
+    description: |
+      Tearing effect mode. mode1 = only V‑blanking, mode2 = V+H blanking.
+      Only meaningful if te-gpios is present.
+
+  vddi-supply:
+    type: phandle
+    description: I/O supply regulator (1.65V-3.6V)
+
+  vci-supply:
+    type: phandle
+    description: Analog supply regulator (2.7V-3.6V)
+
+  width:
+    type: int
+    required: true
+    description: Display width in pixels
+
+  height:
+    type: int
+    required: true
+    description: Display height in pixels
+
+  pixel-format:
+    type: string
+    required: true
+    enum:
+      - "rgb888"
+      - "rgb666"
+      - "rgb565"
+    description: Pixel format (RGB888, RGB666, RGB565)
+
+  madctr:
+    type: int
+    default: 0
+    description: Memory data access control (MADCTR) default value
+
+  invert-display:
+    type: boolean
+    description: Enable display inversion (INVON)
+
+  max-dsi-payload:
+    type: int
+    default: 65535
+    description: |
+      Maximum DSI long packet payload size in bytes (excluding the DCS command byte).
+      This value must be supported by both the DSI host controller and the display.
+      Default is 65535 (DSI specification limit).
