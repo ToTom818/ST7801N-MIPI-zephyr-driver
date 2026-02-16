@@ -2,7 +2,7 @@ description: Sitronix ST7801N AMOLED display controller with MIPI DSI
 
 compatible: "sitronix,st7801n"
 
-include: [mipi-dsi-device.yaml, gpio.yaml, regulator.yaml]
+include: mipi-dsi-device.yaml
 
 properties:
   reset-gpios:
@@ -39,15 +39,6 @@ properties:
     type: int
     required: true
     description: Display height in pixels
-
-  pixel-format:
-    type: string
-    required: true
-    enum:
-      - "rgb888"
-      - "rgb666"
-      - "rgb565"
-    description: Pixel format (RGB888, RGB666, RGB565)
 
   madctr:
     type: int

@@ -1,15 +1,29 @@
+menuconfig ST7801N
+	bool "Sitronix ST7801N display driver"
+	default y
+	depends on DISPLAY
+	depends on MIPI_DSI
+	depends on DT_HAS_SITRONIX_ST7801N_ENABLED
+	select GPIO
+	select REGULATOR
+	help
+	  Enable ST7801N MIPI-DSI AMOLED display controller driver.
+
+if ST7801N
+
 config ST7801N_USE_STATIC_BUFFER
 	bool "Use static buffer for DSI transfers"
 	help
 	  Use a pre-allocated static buffer instead of dynamically allocating
-	  temporary buffers for each DSI long packet. This reduces heap fragmentation
-	  at the cost of fixed memory usage.
+	  temporary buffers for each DSI transfer chunk. This reduces heap
+	  fragmentation at the cost of fixed memory usage.
 
 config ST7801N_STATIC_BUF_SIZE
 	int "Static buffer size (bytes)"
 	depends on ST7801N_USE_STATIC_BUFFER
-	default 65535
+	default 4096
 	help
-	  Size of the static buffer used for DSI long packet transfers.
-	  Must be at least the maximum DSI payload size (max-dsi-payload property
-	  minus one). The default 65535 is the maximum allowed by the DSI specification.
+	  Size of the static buffer used for MIPI-DSI long transfer chunks.
+	  Must be at least max-dsi-payload - 1 for the selected panel node.
+
+endif # ST7801N
