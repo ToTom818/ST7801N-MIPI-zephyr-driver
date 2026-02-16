@@ -47,7 +47,7 @@ LOG_MODULE_REGISTER(st7801n, CONFIG_DISPLAY_LOG_LEVEL);
 
 /* TEON parameter */
 #define ST7801N_TEON_MODE1          0x00U /* only V-blanking */
-#define ST7801N_TEON_MODE2          0x03U /* V+H blanking */
+#define ST7801N_TEON_MODE2          0x01U /* V+H blanking */
 
 #define ST7801N_RESET_ASSERT_MS     1U
 #define ST7801N_RESET_WAIT_MS       2U
@@ -358,6 +358,10 @@ static int st7801n_write(const struct device *dev, uint16_t x, uint16_t y,
 	}
 
 	if (desc->pitch < desc->width) {
+		return -EINVAL;
+	}
+
+	if ((desc->width % 2 != 0) || (desc->height % 2 != 0)) {
 		return -EINVAL;
 	}
 
