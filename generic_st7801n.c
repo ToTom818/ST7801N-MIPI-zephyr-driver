@@ -13,6 +13,8 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/pm/device.h>
 #include <zephyr/sys/util.h>
+#include <zephyr/types.h>
+#include <stdbool.h>
 #include <string.h>
 
 LOG_MODULE_REGISTER(st7801n, CONFIG_DISPLAY_LOG_LEVEL);
@@ -60,6 +62,9 @@ LOG_MODULE_REGISTER(st7801n, CONFIG_DISPLAY_LOG_LEVEL);
 /* TEON parameter */
 #define ST7801N_TEON_MODE1           0x00    /* only V-blanking */
 #define ST7801N_TEON_MODE2           0x03    /* V+H blanking (both TE_M and TELOM set) */
+
+/* Maximum number of parameters for a DCS command (prevents stack overflow) */
+#define ST7801N_MAX_DCS_PARAMS       32
 
 /* Helper to convert DT te-mode string to TEON parameter */
 #define ST7801N_TE_MODE_TO_PARAM(inst) \
@@ -124,6 +129,13 @@ static int st7801n_dcs_write_packet(const struct device *dev, uint8_t cmd,
 	struct mipi_dsi_packet packet;
 	int ret;
 
+	/* Prevent stack overflow if an unreasonably large parameter count is passed */
+	if (num_params > ST7801N_MAX_DCS_PARAMS) {
+		LOG_ERR("Too many DCS parameters (%zu > %d)", num_params,
+			ST7801N_MAX_DCS_PARAMS);
+		return -EINVAL;
+	}
+
 	if (num_params == 0) {
 		ret = mipi_dsi_packet_create_short(&packet,
 						    cfg->dsi.config.virtual_channel,
@@ -138,10 +150,12 @@ static int st7801n_dcs_write_packet(const struct device *dev, uint8_t cmd,
 		uint8_t buf[1 + num_params];
 		buf[0] = cmd;
 		memcpy(&buf[1], params, num_params);
+		/* For long packet, header must be the word count (payload length) */
 		ret = mipi_dsi_packet_create_long(&packet,
 						   cfg->dsi.config.virtual_channel,
 						   MIPI_DSI_DCS_LONG_WRITE,
-						   0, 1 + num_params, buf);
+						   1 + num_params,	/* header = word count */
+						   1 + num_params, buf);
 	}
 
 	if (ret < 0) {
@@ -280,6 +294,12 @@ static int st7801n_init(const struct device *dev)
 		return -EINVAL;
 	}
 
+	/* Sanity check: max_dsi_payload must be at least 2 (command + 1 byte) */
+	if (cfg->max_dsi_payload < 2) {
+		LOG_ERR("max-dsi-payload is too small (%u)", cfg->max_dsi_payload);
+		return -EINVAL;
+	}
+
 	/* Convert pixel format token to COLMOD value and store in data */
 	data->pix_fmt = st7801n_pixfmt_from_token(cfg->pix_fmt_token);
 	if (data->pix_fmt == 0) {
@@ -306,6 +326,8 @@ static int st7801n_init(const struct device *dev)
 			LOG_ERR("Failed to enable VDDIO regulator: %d", ret);
 			return ret;
 		}
+		/* Allow regulator to stabilize */
+		k_msleep(1);
 	}
 	if (cfg->vci_reg.dev) {
 		ret = regulator_enable(cfg->vci_reg.dev, cfg->vci_reg.id);
@@ -313,6 +335,7 @@ static int st7801n_init(const struct device *dev)
 			LOG_ERR("Failed to enable VCI regulator: %d", ret);
 			goto err_vci;
 		}
+		k_msleep(1);
 	}
 
 	/* Configure reset GPIO */
@@ -380,8 +403,14 @@ static int st7801n_pm_action(const struct device *dev,
 		/* Turn off display, sleep, disable regulators */
 		k_mutex_lock(&data->lock, K_FOREVER);
 		if (data->powered_on) {
-			st7801n_dcs_write_packet(dev, ST7801N_CMD_DISPOFF, NULL, 0);
-			st7801n_dcs_write_packet(dev, ST7801N_CMD_SLPIN, NULL, 0);
+			ret = st7801n_dcs_write_packet(dev, ST7801N_CMD_DISPOFF, NULL, 0);
+			if (ret < 0) {
+				LOG_WRN("DISPOFF during suspend failed: %d", ret);
+			}
+			ret = st7801n_dcs_write_packet(dev, ST7801N_CMD_SLPIN, NULL, 0);
+			if (ret < 0) {
+				LOG_WRN("SLPIN during suspend failed: %d", ret);
+			}
 			k_msleep(5);
 			if (cfg->vci_reg.dev) {
 				regulator_disable(cfg->vci_reg.dev, cfg->vci_reg.id);
@@ -390,6 +419,7 @@ static int st7801n_pm_action(const struct device *dev,
 				regulator_disable(cfg->vddi_reg.dev, cfg->vddi_reg.id);
 			}
 			data->powered_on = false;
+			/* NOTE: Do not invalidate dsi_dev handle; keep it for resume */
 		}
 		k_mutex_unlock(&data->lock);
 		break;
@@ -403,6 +433,7 @@ static int st7801n_pm_action(const struct device *dev,
 				LOG_ERR("Failed to re-enable VDDIO regulator: %d", ret);
 				goto out;
 			}
+			k_msleep(1);
 		}
 		if (cfg->vci_reg.dev) {
 			ret = regulator_enable(cfg->vci_reg.dev, cfg->vci_reg.id);
@@ -413,6 +444,7 @@ static int st7801n_pm_action(const struct device *dev,
 				}
 				goto out;
 			}
+			k_msleep(1);
 		}
 		ret = st7801n_hw_init(dev);
 		if (ret < 0) {
@@ -505,9 +537,17 @@ static int st7801n_write(const struct device *dev, const uint16_t x,
 		return -EINVAL;
 	}
 
-	if ((desc->width % 2 != 0) || (desc->height % 2 != 0) ||
-	    (x % 2 != 0) || (y % 2 != 0)) {
-		LOG_ERR("Write dimensions and start coordinates must be even");
+	/* According to datasheet, only the total width and height must be even;
+	 * start coordinates can be odd.
+	 */
+	if ((desc->width % 2 != 0) || (desc->height % 2 != 0)) {
+		LOG_ERR("Write width and height must be even");
+		return -EINVAL;
+	}
+
+	/* Bounds check */
+	if (x + desc->width > cfg->width || y + desc->height > cfg->height) {
+		LOG_ERR("Write region exceeds display bounds");
 		return -EINVAL;
 	}
 
@@ -522,6 +562,13 @@ static int st7801n_write(const struct device *dev, const uint16_t x,
 		break;
 	default:
 		LOG_ERR("Unknown pixel format");
+		return -EINVAL;
+	}
+
+	/* Safety check: bytes_per_row must be non-zero to avoid division by zero later */
+	uint32_t bytes_per_row = desc->width * bpp;
+	if (bytes_per_row == 0) {
+		LOG_ERR("Bytes per row is zero (invalid width or bpp)");
 		return -EINVAL;
 	}
 
@@ -559,7 +606,6 @@ static int st7801n_write(const struct device *dev, const uint16_t x,
 
 	/* Maximum payload per DSI long packet (excluding command byte) */
 	uint32_t max_data_per_packet = cfg->max_dsi_payload - 1;  /* reserve one byte for command */
-	uint32_t bytes_per_row = desc->width * bpp;
 	uint32_t max_rows_per_packet = max_data_per_packet / bytes_per_row;
 
 	if (max_rows_per_packet == 0) {
@@ -607,10 +653,12 @@ static int st7801n_write(const struct device *dev, const uint16_t x,
 		}
 
 		struct mipi_dsi_packet packet;
+		/* Header must be the word count = payload length */
 		ret = mipi_dsi_packet_create_long(&packet,
 						   cfg->dsi.config.virtual_channel,
 						   MIPI_DSI_DCS_LONG_WRITE,
-						   0, data_bytes_this_packet + 1, tmp_buf);
+						   data_bytes_this_packet + 1,	/* header */
+						   data_bytes_this_packet + 1, tmp_buf);
 		if (ret == 0) {
 			ret = mipi_dsi_transfer(data->dsi_dev, &packet);
 		}
@@ -623,7 +671,7 @@ static int st7801n_write(const struct device *dev, const uint16_t x,
 			LOG_ERR("DSI transfer failed: %d", ret);
 			break;
 		}
-		ret = 0;  /* success for this chunk */
+		/* ret is 0 on success; continue to next chunk */
 
 		rows_remaining -= rows_this_packet;
 		row_offset += rows_this_packet;
